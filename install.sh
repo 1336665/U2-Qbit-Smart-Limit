@@ -732,6 +732,67 @@ EOFSVC
 }
 
 # ════════════════════════════════════════════════════════════
+# 下载 qsl 模块
+# ════════════════════════════════════════════════════════════
+download_qsl_modules() {
+    local qsl_dir="${INSTALL_DIR}/qsl"
+    mkdir -p "$qsl_dir"
+    
+    # 模块文件列表
+    local modules=("__init__.py" "utils.py" "config.py" "database.py" "telegram.py" "u2_helper.py" "core.py" "subscription.py" "cleanup.py")
+    
+    local success=0
+    local failed=0
+    
+    for mod in "${modules[@]}"; do
+        local url="${GITHUB_RAW}/qsl/${mod}"
+        local dest="${qsl_dir}/${mod}"
+        local tmp="/tmp/qsl_mod_$$.tmp"
+        
+        echo -ne "  ${C}↓${N} 下载 qsl/${mod}..."
+        
+        local http_code
+        http_code=$(curl -sL --connect-timeout 10 -w "%{http_code}" "$url" -o "$tmp" 2>/dev/null)
+        
+        if [[ "$http_code" == "200" && -s "$tmp" ]]; then
+            mv "$tmp" "$dest"
+            echo -e "\r  ${G}✓${N} 下载 qsl/${mod}              "
+            ((success++))
+        else
+            rm -f "$tmp" 2>/dev/null
+            echo -e "\r  ${R}✗${N} 下载 qsl/${mod} (HTTP $http_code)   "
+            ((failed++))
+        fi
+    done
+    
+    echo ""
+    if [[ $success -eq ${#modules[@]} ]]; then
+        ok "qsl 模块下载完成 ($success/${#modules[@]})"
+        return 0
+    elif [[ $success -gt 0 ]]; then
+        warn "qsl 模块部分下载 ($success/${#modules[@]})"
+        return 0
+    else
+        err "qsl 模块下载失败"
+        echo ""
+        echo -e "  ${Y}GitHub 仓库可能未包含 qsl/ 目录${N}"
+        echo -e "  ${D}请检查: ${GITHUB_RAW}/qsl/${N}"
+        echo ""
+        echo -e "  ${W}解决方案:${N}"
+        echo -e "  1. 将 qsl/ 目录上传到 GitHub 仓库"
+        echo -e "  2. 或使用单文件版本的 main.py"
+        echo ""
+        return 1
+    fi
+}
+
+# 检查 main.py 是否需要 qsl 模块
+check_needs_qsl() {
+    local file="$1"
+    [[ -f "$file" ]] && grep -q "from qsl import\|import qsl" "$file"
+}
+
+# ════════════════════════════════════════════════════════════
 # 安装
 # ════════════════════════════════════════════════════════════
 do_install() {
@@ -753,6 +814,19 @@ do_install() {
     
     mkdir -p "$INSTALL_DIR"
     download "${GITHUB_RAW}/main.py" "$MAIN_PY" "main.py" || return 1
+    
+    # 检查是否需要下载 qsl 模块
+    if check_needs_qsl "$MAIN_PY"; then
+        echo ""
+        info "检测到模块化版本，下载 qsl 模块..."
+        echo ""
+        if ! download_qsl_modules; then
+            echo ""
+            read -rp "  是否继续安装? (模块缺失可能导致运行失败) [y/N]: " cont
+            [[ ! "$cont" =~ ^[Yy] ]] && return 1
+        fi
+    fi
+    
     patch_main_py "$MAIN_PY" || return 1
     
     get_input || return 1
@@ -874,6 +948,11 @@ do_update() {
             [[ -f "$MAIN_PY" ]] && cp "$MAIN_PY" "${MAIN_PY}.bak"
             
             if download "${GITHUB_RAW}/main.py" "$MAIN_PY" "main.py"; then
+                # 检查是否需要下载 qsl 模块
+                if check_needs_qsl "$MAIN_PY"; then
+                    info "检测到模块化版本，更新 qsl 模块..."
+                    download_qsl_modules || warn "部分模块下载失败"
+                fi
                 patch_main_py "$MAIN_PY" || true
                 migrate_config
                 systemctl restart qbit-smart-limit 2>/dev/null && ok "服务已重启"
@@ -904,6 +983,11 @@ do_update() {
                 local new_v
                 new_v=$(get_local_ver)
                 ok "已更新到 v${new_v}"
+                # 检查是否需要下载 qsl 模块
+                if check_needs_qsl "$MAIN_PY"; then
+                    info "检测到模块化版本，更新 qsl 模块..."
+                    download_qsl_modules || warn "部分模块下载失败"
+                fi
                 patch_main_py "$MAIN_PY" || true
                 migrate_config
                 systemctl restart qbit-smart-limit 2>/dev/null && ok "服务已重启"
